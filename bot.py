@@ -1,98 +1,167 @@
+import os
+import json
 import requests
 import time
 import random
 from rich import print
 from rich.panel import Panel
 
+
 banner = """[bold cyan]
-╔════════════════════════════╗
-║       ⚡ AUTO REFF ⚡      ║
-║  [bold yellow]by Bakol Bawok Team[/bold yellow]       ║
-╚════════════════════════════╝
+╔════════════════════════════════════╗
+║     ⚡ HUB.AI DASHBOARD BOT ⚡     ║
+║   adapted for https://ai.hub.xyz   ║
+╚════════════════════════════════════╝
 """
 print(banner)
 
-REF_CODE_TARGET = input("\n📝 Masukkan kode referral (contoh: 6C3FDC): ").strip()
-BASE_RPC = "https://zftuqjqxgccsiqlbwnem.supabase.co/rest/v1/rpc"
-BASE_FUNC = "https://zftuqjqxgccsiqlbwnem.supabase.co/functions/v1"
-BEARER_TOKEN = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpmdHVxanF4Z2Njc2lxbGJ3bmVtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTEyMDQ2NzgsImV4cCI6MjA2Njc4MDY3OH0.FnnferDujmSwGW-vDY7Gyfb_-rgYPBIpJYdKxIQ1eiU"
 
-def load_lines(file):
+BASE_API = "https://ai-api.hub.xyz"
+
+
+def read_lines(path: str):
     try:
-        with open(file, "r") as f:
-            return [line.strip() for line in f if line.strip()]
-    except:
+        with open(path, "r") as f:
+            return [ln.strip() for ln in f if ln.strip()]
+    except Exception:
         return []
 
-addresses = load_lines("addresssolana.txt")
+
+def get_bearer_token() -> str:
+    token = os.getenv("HUB_API_TOKEN", "").strip()
+    if not token:
+        # allow storing the token in a file for convenience
+        for fname in ("hub_token.txt", ".hub_token"):
+            try:
+                with open(fname, "r") as f:
+                    token = f.read().strip()
+                    if token:
+                        break
+            except Exception:
+                pass
+    if not token:
+        entered = input("🔑 Enter Hub API token (paste, with or without 'Bearer '): ").strip()
+        token = entered
+    if token and not token.lower().startswith("bearer "):
+        token = f"Bearer {token}"
+    return token
+
+
+def pretty_print_json(label: str, payload: dict | list | str | None):
+    try:
+        if isinstance(payload, (dict, list)):
+            text = json.dumps(payload, indent=2, ensure_ascii=False)
+        else:
+            text = str(payload)
+        print(Panel.fit(text, title=label, border_style="cyan"))
+    except Exception:
+        print(f"[cyan]{label}[/]: {payload}")
+
+
+def hub_request(session: requests.Session, method: str, path: str, headers: dict, **kwargs):
+    url = f"{BASE_API}{path}"
+    resp = session.request(method.upper(), url, headers=headers, timeout=30, **kwargs)
+    ct = resp.headers.get("content-type", "")
+    data = None
+    try:
+        if "application/json" in ct:
+            data = resp.json()
+        else:
+            data = resp.text
+    except Exception:
+        data = resp.text
+    return resp, data
+
+
+REF_CODE_TARGET = os.getenv("HUB_REF_CODE", "").strip() or input("\n📝 Enter referral code to validate (example: HUB123): ").strip()
+
+addresses = read_lines("addresssolana.txt")
+if not addresses:
+    # run at least once if no wallet list is provided
+    addresses = ["-"]
 random.shuffle(addresses)
-proxies = load_lines("proxy.txt")
+proxies = read_lines("proxy.txt")
+
+
+token = get_bearer_token()
+if not token:
+    print("[yellow]No API token supplied. Most endpoints will return 401.[/]")
+
+env_user_id = os.getenv("HUB_USER_ID", "").strip()
+if env_user_id:
+    print(f"[white]Using HUB_USER_ID from env: [cyan]{env_user_id}[/]")
+
 
 for idx, address in enumerate(addresses, start=1):
-    print(f"\n[bold white]━━━━━━━━━━━━━━ Wallet #{idx} ━━━━━━━━━━━━━━[/]")
-    print(f"👛 Address: [cyan]{address}[/]")
+    print(f"\n[bold white]━━━━━━━━━━━━━━ Session #{idx} ━━━━━━━━━━━━━━[/]")
+    if address != "-":
+        print(f"🆔 Context: [cyan]{address}[/]")
 
     session = requests.Session()
     if proxies:
         proxy = random.choice(proxies)
         session.proxies = {"http": proxy, "https": proxy}
-        print(f"[magenta]🌐 Proxy aktif:[/] {proxy}")
+        print(f"[magenta]🌐 Proxy enabled:[/] {proxy}")
 
     headers = {
-        "authorization": BEARER_TOKEN,
-        "apikey": BEARER_TOKEN.replace("Bearer ", ""),
+        "accept": "application/json",
         "content-type": "application/json",
-        "accept": "*/*"
     }
+    if token:
+        headers["authorization"] = token
 
     try:
-        res_create = session.post(f"{BASE_RPC}/get_or_create_referral_code", json={"p_wallet_address": address}, headers=headers)
-        if res_create.status_code != 200:
-            print(f"[red]❌ Gagal ambil referral code:[/] {res_create.text}")
-            continue
-        ref_code = res_create.json()
-        print(f"[green]✅ Referral Code Created:[/] {ref_code}")
-
-        time.sleep(random.randint(3, 5))
-
-        res_resolve = session.post(f"{BASE_RPC}/resolve_referral_code", json={"p_code": REF_CODE_TARGET}, headers=headers)
-        if res_resolve.status_code != 200:
-            print(f"[red]⚠️ Gagal resolve referral:[/] {res_resolve.text}")
-            continue
-        referred_by = res_resolve.json()
-        print(f"[green]🎉 Referral resolved → Referred by:[/] {referred_by}")
-
-        res_process = session.post(f"{BASE_RPC}/process_referral", json={
-            "p_referrer_wallet": referred_by,
-            "p_referee_wallet": address,
-            "p_holding_behavior": 100
-        }, headers=headers)
-        if res_process.status_code == 200 and res_process.json().get("success"):
-            print(f"[yellow]🏆 Referral Success → {res_process.json().get('xp_earned')} XP earned![/]")
+        # 1) Validate referral code
+        resp, data = hub_request(
+            session,
+            "GET",
+            "/users/code-exists",
+            headers,
+            params={"code": REF_CODE_TARGET},
+        )
+        if resp.status_code == 200:
+            print("[green]✅ Referral code is valid on Hub[/]")
+        elif resp.status_code == 404:
+            print("[red]❌ Referral code not found[/]")
+        elif resp.status_code == 401:
+            print("[yellow]⚠️ Unauthorized while checking referral code. Provide a valid HUB_API_TOKEN.[/]")
         else:
-            print(f"[red]⚠️ Referral failed atau tidak eligible[/]")
+            print(f"[yellow]⚠️ Referral code check HTTP {resp.status_code}[/]")
+            pretty_print_json("/users/code-exists", data)
 
-        res_x = session.post(f"{BASE_RPC}/complete_task", json={"p_wallet_address": address, "p_task_type": "follow_x"}, headers=headers)
-        if res_x.status_code == 200 and res_x.json().get("success"):
-            print(f"[blue]🌀 Task X bypassed → {res_x.json().get('xp_earned')} XP[/]")
+        # 2) Current user's referral points
+        resp, data = hub_request(session, "GET", "/users/referral/points", headers)
+        if resp.status_code == 200:
+            pretty_print_json("Referral Points", data)
+        elif resp.status_code == 401:
+            print("[yellow]⚠️ Unauthorized to fetch referral points (token required).[/]")
 
-        res_tele = session.post(f"{BASE_RPC}/complete_task", json={"p_wallet_address": address, "p_task_type": "join_telegram"}, headers=headers)
-        if res_tele.status_code == 200 and res_tele.json().get("success"):
-            print(f"[blue]📢 Telegram task bypassed → {res_tele.json().get('xp_earned')} XP[/]")
+        # 3) Follow Hub status
+        resp, data = hub_request(session, "GET", "/users/follow-hub/status", headers)
+        if resp.status_code == 200:
+            pretty_print_json("Follow @hubdotxyz Status", data)
 
-        res_analyze = session.post(f"{BASE_FUNC}/analyze-wallet", json={"walletAddress": address}, headers=headers)
-        if res_analyze.status_code == 200 and res_analyze.json().get("success"):
-            d = res_analyze.json()
-            print("[bold green]📊 Wallet Analysis:[/]")
-            print(f"   🧮 Tx Count     : {d.get('transactionCount')}")
-            print(f"   🧠 Brizo Score  : {d.get('brizoScore')}")
-            print(f"   🏅 Tier         : {d.get('tier')}")
-            print(f"   🎁 Allocation   : {d.get('allocation')}")
-        else:
-            print(f"[yellow]⚠️ Gagal analisa wallet.[/]")
+        # 4) Hubscore summary
+        resp, data = hub_request(session, "GET", "/hubscore/", headers)
+        if resp.status_code == 200:
+            pretty_print_json("Hubscore", data)
+
+        # 5) Latest Hub tweet info (public)
+        resp, data = hub_request(session, "GET", "/twitter/tweets/hub", headers)
+        if resp.status_code == 200:
+            pretty_print_json("Latest Hub Tweet", data)
+
+        # 6) Optional: list referees for a given user id (if provided)
+        if env_user_id:
+            resp, data = hub_request(session, "GET", f"/referrals/referees/{env_user_id}", headers)
+            if resp.status_code == 200:
+                pretty_print_json("Your Referees", data)
+            elif resp.status_code == 401:
+                print("[yellow]⚠️ Unauthorized to list referees. Check HUB_API_TOKEN.[/]")
+
     except Exception as e:
         print(f"[red]❌ Error:[/] {e}")
 
-    delay = random.randint(8, 15)
-    print(f"[white]⏳ Delay {delay} detik sebelum lanjut...[/]")
+    delay = random.randint(6, 12)
+    print(f"[white]⏳ Delay {delay}s before next session...[/]")
     time.sleep(delay)
